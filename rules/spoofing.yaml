@@ -1,0 +1,68 @@
+# Intent Spoofing 탐지 규칙
+# 판별 원리: exported 컴포넌트 + 발신자 검증 API 호출 부재 (구조적 판별, taint 분석 불필요)
+
+sources:
+  # Intent 자체 및 세부 extra 추출 메소드 (모두 "검증 없이 신뢰당하는 지점" 후보)
+  - class: Landroid/app/Activity;
+    method: getIntent
+    descriptor: "()Landroid/content/Intent;"
+  - class: Landroid/content/Intent;
+    method: getStringExtra
+    descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
+  - class: Landroid/content/Intent;
+    method: getExtras
+    descriptor: "()Landroid/os/Bundle;"
+  - class: Landroid/content/Intent;
+    method: getParcelableExtra
+    descriptor: "(Ljava/lang/String;)Landroid/os/Parcelable;"
+  - class: Landroid/content/Intent;
+    method: getData
+    descriptor: "()Landroid/net/Uri;"
+
+# 민감 동작 sink - CVE-2024-36062(전화 걸기), CVE-2023-47889(재부팅/전원) 기반
+sinks:
+  - class: Landroid/content/Context;
+    method: sendBroadcast
+    descriptor: "(Landroid/content/Intent;)V"
+  - class: Landroid/content/Context;
+    method: registerReceiver
+    descriptor: "(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;"
+  - class: Landroid/content/ContentResolver;
+    method: insert
+    descriptor: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;"
+  - class: Landroid/content/ContentResolver;
+    method: delete
+    descriptor: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I"
+  - class: Landroid/content/ContentResolver;
+    method: update
+    descriptor: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I"
+  - class: Landroid/telephony/TelephonyManager;
+    method: call
+    descriptor: null   # 기기별로 시그니처가 다를 수 있어 이름 매칭으로 보강 필요
+
+# 검증 API — 이 중 하나라도 호출되면 "검증됨"으로 간주 (부재 여부가 핵심 판별 기준)
+validators:
+  - class: Landroid/app/Activity;
+    method: getCallingPackage
+    descriptor: "()Ljava/lang/String;"
+  - class: Landroid/app/Activity;
+    method: getCallingActivity
+    descriptor: "()Landroid/content/ComponentName;"
+  - class: Landroid/content/pm/PackageManager;
+    method: checkSignatures
+    descriptor: null
+  - class: Landroid/content/pm/PackageManager;
+    method: checkPermission
+    descriptor: "(Ljava/lang/String;Ljava/lang/String;)I"
+  - class: Landroid/content/Context;
+    method: checkCallingPermission
+    descriptor: "(Ljava/lang/String;)I"
+  - class: Landroid/content/Context;
+    method: checkCallingOrSelfPermission
+    descriptor: "(Ljava/lang/String;)I"
+
+# 판정 규칙: manifest_parser.py 결과의 exported=true 컴포넌트 중,
+# 해당 컴포넌트의 코드 안에서 validators 목록의 API가 하나도 호출되지 않으면 취약 후보로 표시
+notes: |
+  false-negative 주의: null 체크(hasExtra, != null)는 검증으로 인정하지 않음.
+  detectors/spoofing.py 에서 별도로 "가짜 검증 패턴"을 걸러낼 것.

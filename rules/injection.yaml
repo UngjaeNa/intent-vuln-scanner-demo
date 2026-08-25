@@ -1,0 +1,64 @@
+# Intent Injection 탐지 규칙
+# 판별 원리: 외부 입력값(딥링크/extra)이 검증 없이 위험한 sink로 흘러감 (데이터 흐름 추적 필요 - 정밀도 위해 FlowDroid 연동 권장 지점)
+
+sources:
+  - class: Landroid/content/Intent;
+    method: getStringExtra
+    descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
+  - class: Landroid/content/Intent;
+    method: getData
+    descriptor: "()Landroid/net/Uri;"
+  - class: Landroid/content/Intent;
+    method: getDataString
+    descriptor: "()Ljava/lang/String;"
+  - class: Landroid/net/Uri;
+    method: getQueryParameter
+    descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
+  - class: Landroid/os/Bundle;
+    method: getString
+    descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
+    note: "getExtras()로 Bundle을 통째로 꺼낸 뒤 값을 뽑는 경로 - CustomReceiver(InsecureShop) 사례로 발견, 기존엔 누락돼 있었음"
+
+# FlowDroid/IccTA 기본 파일에 빠져 있던 부분 - 별도 조사로 확보한 sink
+sinks:
+  - class: Landroid/webkit/WebView;
+    method: loadUrl
+    descriptor: "(Ljava/lang/String;)V"
+    severity: high
+  - class: Landroid/webkit/WebView;
+    method: addJavascriptInterface
+    descriptor: "(Ljava/lang/Object;Ljava/lang/String;)V"
+    severity: high
+    note: "JavaScript 활성화 + 이 API 결합 시 피해 확대 (CVE-2024-26131 패턴)"
+  - class: Ljava/lang/Runtime;
+    method: exec
+    descriptor: null
+    severity: critical
+  - class: Ljava/lang/ProcessBuilder;
+    method: start
+    descriptor: "()Ljava/lang/Process;"
+    severity: critical
+  - class: Ljava/io/FileOutputStream;
+    method: write
+    descriptor: null
+
+# propagators: sink는 아니지만 값이 다음 단계로 넘어가는 중간 지점.
+# 단독으로는 위험하지 않으므로 detectors/injection.py 에서 sink로 쓰지 않는다.
+# (FlowDroid는 개인정보 유출 탐지가 목적이라 이런 API도 sink로 등록해두지만,
+#  Injection 탐지 목적에서는 "값이 최종적으로 위험한 곳까지 갔는가"가 핵심이라
+#  중간 지점만으로 판정하면 오탐이 많아진다 - 실제 GoogleCloudMessaging/
+#  InstanceIDListenerService 오탐 사례로 확인됨)
+propagators:
+  - class: Landroid/os/Bundle;
+    method: putString
+    descriptor: "(Ljava/lang/String;Ljava/lang/String;)V"
+    note: "중간 단계 - 단독 sink로 쓰지 않음. 2단계 체인 분석 도입 시 재활용"
+  - class: Landroid/os/Bundle;
+    method: putParcelable
+    descriptor: null
+    note: "중간 단계 - 단독 sink로 쓰지 않음"
+
+notes: |
+  이 취약점은 source-sink 쌍이 다양해 휴리스틱만으로는 오탐/미탐이 많을 가능성이 높음.
+  1차: dataflow/heuristic.py 로 같은 메소드 내 후보 필터링
+  2차: 애매한 케이스는 dataflow/flowdroid_bridge.py 로 위임 (선택적 실행)

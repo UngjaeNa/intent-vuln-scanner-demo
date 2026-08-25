@@ -1,0 +1,58 @@
+# Intent Redirection 탐지 규칙
+# 판별 원리: getParcelableExtra의 반환 타입이 Intent 객체 자체인 경우 + 검증 없이 재실행
+# IccTA 파일 근거로 startActivity(Intent) 를 활성 sink로 채택 (FlowDroid 원본은 주석 처리돼 있었음)
+
+sources:
+  - class: Landroid/content/Intent;
+    method: getParcelableExtra
+    descriptor: "(Ljava/lang/String;)Landroid/os/Parcelable;"
+    type_filter: "Landroid/content/Intent;"   # 반환값이 실제로 Intent 타입으로 캐스팅되는지 확인 필요
+    note: "핵심 판별 조건 - 문자열이 아니라 Intent 객체를 꺼내는 경우만 해당"
+  - class: Landroid/app/Activity;
+    method: getIntent
+    descriptor: "()Landroid/content/Intent;"
+  - class: Landroid/app/Activity;
+    method: onActivityResult
+    descriptor: "(IILandroid/content/Intent;)V"
+    note: "IccTA 파일에 등록된 source - 변형 케이스(반환된 Intent 재전달)용"
+
+sinks:
+  - class: Landroid/content/Context;
+    method: startActivity
+    descriptor: "(Landroid/content/Intent;)V"
+    note: "FlowDroid 원본은 주석 처리, IccTA 파일 기준으로 활성 채택"
+  - class: Landroid/app/Activity;
+    method: startActivity
+    descriptor: "(Landroid/content/Intent;)V"
+  - class: Landroid/content/Context;
+    method: startService
+    descriptor: "(Landroid/content/Intent;)Landroid/content/ComponentName;"
+  - class: Landroid/content/Context;
+    method: bindService
+    descriptor: null
+  - class: Landroid/content/Context;
+    method: sendBroadcast
+    descriptor: "(Landroid/content/Intent;)V"
+  - class: Landroid/app/Activity;
+    method: setResult
+    descriptor: "(ILandroid/content/Intent;)V"
+    note: |
+      IR-Hunter 논문(ICASSP 2026, Fig.1)에서 다룬 패턴 - 공격자가 준 Intent를
+      검증 없이 그대로 setResult()로 돌려보내면, 이 액티비티를 startActivityForResult로
+      호출한 쪽(호출자)에게 민감 정보가 유출될 수 있음. startActivity류(재전달)와는
+      방향이 반대(재전달이 아니라 "돌려주기")지만, "검증 없이 그대로 넘긴다"는
+      핵심 판별 조건은 동일해서 같은 rule 구조로 포착 가능.
+  - class: Landroid/app/PendingIntent;
+    method: send
+    descriptor: null
+    note: "PendingIntent 역방향 리다이렉션 - FlowDroid/IccTA 둘 다 미등록, 별도 추가"
+
+validators:
+  - class: Landroid/content/Intent;
+    method: resolveActivity
+    descriptor: "(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;"
+
+notes: |
+  타입 판별(Intent.getParcelableExtra 반환값이 Intent로 캐스팅되는지)은
+  androguard의 smali 명령어에서 check-cast 연산을 추적해 확인.
+  core/type_resolver.py 에서 처리.
